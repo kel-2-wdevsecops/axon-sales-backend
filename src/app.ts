@@ -61,7 +61,7 @@ app.get('/', healthLimiter, (_req: Request, res: Response) => {
 // ── API Routes ────────────────────────────────────────────────────────────────
 const api = express.Router();
 
-// Dicek CI/CD (.github/workflows/deploy.yml & update_env.yml) setelah tiap
+// Dicek CI/CD (.github/workflows/staging.yml, deploy.yml & update_env.yml) setelah tiap
 // deploy — sengaja publik (tanpa auth) dan ikut cek koneksi DB, bukan cuma
 // "server hidup". `version` menunjukkan rilis mana yang sedang berjalan;
 // deploy menganggap rilis gagal kalau versinya tidak sama.
