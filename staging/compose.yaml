@@ -1,49 +1,30 @@
 # Stack staging di VPS 1 GB (yang juga menjalankan Panel Pterodactyl).
-# Satu stack untuk semua: MariaDB, BE, FE, dan cloudflared. Disalin SEKALI ke
-# /opt/axon-staging/compose.yaml oleh operator (lihat staging/README.md),
-# bukan oleh workflow: kunci SSH CI hanya boleh menjalankan axon-staging.sh,
-# tidak boleh mengganti file ini (compose yang diganti penyerang = root).
+# Isinya BE, FE, dan cloudflared. Database TIDAK di-container-kan: BE memakai
+# MariaDB yang sudah berjalan di host untuk Panel, lewat unix socket, dengan
+# database `classicmodels` dan user hanya-SELECT tersendiri (staging/README.md
+# langkah 5). Satu MariaDB lebih sedikit = sekitar 60-120 MB RAM kembali.
+#
+# Disalin SEKALI ke /opt/axon-staging/compose.yaml oleh operator, bukan oleh
+# workflow: kunci SSH CI hanya boleh menjalankan axon-staging.sh, tidak boleh
+# mengganti file ini (compose yang diganti penyerang = root).
 #
 # Image BE/FE tidak pernah di-build di VPS. Workflow staging.yml menyuruh
 # axon-staging.sh menarik image berdasarkan digest (hasil build.yml yang sudah
 # di-scan dan di-sign), lalu menulis referensinya sebagai BE_IMAGE/FE_IMAGE di
 # .env. Digest yang sama nanti dipromosikan ke produksi.
 #
-# Batas memori sengaja ketat. Jumlah batasnya (~700 MB) adalah batas atas,
-# bukan pemakaian; pemakaian normal sekitar 250-350 MB. Swap tetap wajib.
+# Batas memori sengaja ketat; pemakaian normal sekitar 100-150 MB. Swap tetap
+# wajib.
 
 name: axon-staging
 
 services:
-  mariadb:
-    image: docker.io/library/mariadb:11.8@sha256:93fc3fe333b6cdfb061425869c2c3a5bb2851c0c74dbebc2c940f024e7482d76
-    restart: unless-stopped
-    mem_limit: 320m
-    environment:
-      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?isi MARIADB_ROOT_PASSWORD di .env}
-      # Dipakai initdb/20-app-user.sh untuk membuat user hanya-SELECT.
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?isi APP_DB_PASSWORD di .env}
-    volumes:
-      - mariadb-data:/var/lib/mysql
-      - ./mariadb.cnf:/etc/mysql/conf.d/zz-staging.cnf:ro
-      # Hanya dijalankan saat volume data masih kosong (start pertama).
-      - ./initdb:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    networks: [staging]
-
   devsecops_be:
     # Ditulis axon-staging.sh (BE_IMAGE=ghcr.io/kel-2-wdevsecops/be@sha256:...).
     image: ${BE_IMAGE:-ghcr.io/kel-2-wdevsecops/be:latest}
     restart: unless-stopped
     init: true
     mem_limit: 256m
-    depends_on:
-      mariadb:
-        condition: service_healthy
     environment:
       TZ: Asia/Jakarta
       PORT: 3008
@@ -52,10 +33,24 @@ services:
       # Heap V8 di bawah mem_limit, supaya Node membersihkan memori sebelum
       # container dibunuh OOM killer.
       NODE_OPTIONS: --max-old-space-size=160
-      DATABASE_URL: mysql://classicmodels_app:${APP_DB_PASSWORD}@mariadb:3306/classicmodels
+      # Lewat socket, bukan TCP: MariaDB host tetap hanya mendengar di
+      # 127.0.0.1 (bawaan Ubuntu), tidak perlu bind-address baru atau aturan
+      # firewall. Host di URL diabaikan saat socketPath diisi; user-nya
+      # dibuat sebagai 'classicmodels_app'@'localhost'.
+      DATABASE_URL: mysql://classicmodels_app:${APP_DB_PASSWORD:?isi APP_DB_PASSWORD di .env}@localhost/classicmodels?socketPath=/run/mysqld/mysqld.sock
       # Sama dengan produksi: hanya aman selama tidak ada `ports` di stack ini
       # dan satu-satunya jalan masuk adalah Cloudflare Tunnel.
       BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-true}
+    volumes:
+      # Folder, bukan file socket: MariaDB membuat socket baru setiap restart,
+      # dan mount file akan tertinggal menunjuk socket lama. Read-only tetap
+      # bisa dipakai untuk connect ke socket.
+      - /run/mysqld:/run/mysqld:ro
+    # Container ini menyentuh socket DB milik host, jadi diperketat: tanpa
+    # capability dan tanpa jalan menaikkan hak (lihat README soal unix_socket).
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     networks: [staging]
 
   devsecops_fe:
@@ -84,9 +79,6 @@ services:
     networks: [staging]
     # Aktif hanya dengan COMPOSE_PROFILES=tunnel di .env.
     profiles: [tunnel]
-
-volumes:
-  mariadb-data:
 
 # Network milik stack ini sendiri (juga terpisah dari pterodactyl_nw kalau
 # suatu saat Wings dipasang di VPS yang sama).
