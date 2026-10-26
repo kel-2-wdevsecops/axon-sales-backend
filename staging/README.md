@@ -90,18 +90,53 @@ less /tmp/get-docker.sh          # baca dulu sebelum menjalankan skrip dari inte
 sh /tmp/get-docker.sh
 ```
 
-Batasi ukuran log container, supaya disk dan memori tidak habis oleh log:
+Batas RAM dipasang di tiga lapis. `daemon.json` saja **tidak** membatasi RAM; isinya hanya membatasi ukuran log (disk) dan menaruh semua container di satu slice systemd yang dibatasi.
+
+| Lapis | Di mana | Yang dibatasi |
+|---|---|---|
+| Per container | `mem_limit` di `compose.yaml` | BE 256 MB, FE 64 MB, cloudflared 64 MB |
+| Semua container | `docker-staging.slice` | Total 450 MB, termasuk container yang kelak dijalankan manual tanpa `mem_limit` |
+| Daemon | drop-in `docker.service` dan `containerd.service` | `MemoryHigh` 150 MB: daemon diperlambat dan dipaksa melepas cache, **tidak dibunuh** |
+
+`MemoryHigh` sengaja dipakai untuk daemon, bukan `MemoryMax`: dockerd yang dibunuh OOM killer membuat semua container ikut kehilangan pengelolanya. Untuk container, `MemoryMax` aman karena yang dibunuh hanya container itu, lalu `restart: unless-stopped` menyalakannya lagi.
 
 ```bash
+cat > /etc/systemd/system/docker-staging.slice <<'UNIT'
+[Unit]
+Description=Batas RAM semua container Docker (staging)
+
+[Slice]
+MemoryHigh=400M
+MemoryMax=450M
+UNIT
+
+for svc in docker containerd; do
+  mkdir -p /etc/systemd/system/$svc.service.d
+  printf '[Service]\nMemoryHigh=150M\n' > /etc/systemd/system/$svc.service.d/memory.conf
+done
+
 cat > /etc/docker/daemon.json <<'JSON'
 {
+  "cgroup-parent": "docker-staging.slice",
   "log-driver": "local",
   "log-opts": { "max-size": "10m", "max-file": "3" }
 }
 JSON
-systemctl restart docker
+
+systemctl daemon-reload
+systemctl restart containerd docker
 docker version --format '{{.Server.Version}}' && docker compose version
 ```
+
+Periksa bahwa batasnya benar-benar berlaku, setelah container pertama jalan (langkah 6):
+
+```bash
+systemctl show docker-staging.slice -p MemoryMax -p MemoryCurrent
+systemctl show docker -p MemoryHigh -p MemoryCurrent
+docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'   # kolom kanan = mem_limit per container
+```
+
+Ubuntu 24.04 memakai cgroup v2, jadi ketiga lapis ini ditegakkan kernel. `mem_limit` di compose juga mengizinkan container memakai swap sebesar batasnya. Itu disengaja: di RAM 842 MB, container yang melambat karena swap lebih baik daripada container yang dibunuh.
 
 Docker mengatur iptables sendiri, tetapi tidak menyentuh nginx Panel di port 80/443, karena stack staging tidak mem-publish port apa pun.
 
