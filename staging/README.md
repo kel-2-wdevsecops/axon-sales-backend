@@ -146,19 +146,27 @@ Isinya satu baris `IP_VPS ssh-ed25519 AAAA...`: **host key publik** VPS, bukan s
 
 SSH dianggap memakai port 22. Kalau port SSH VPS diubah, tambahkan `-p PORT` di step *Deploy ke VPS staging* pada `staging.yml` kedua repo.
 
-### 8. Environment `staging` di GitHub
+### 8. Secret dan variable organisasi di GitHub
 
-Lakukan di **kedua** repo (BE dan FE): **Settings → Environments → New environment → `staging`**.
+Cukup **sekali** untuk kedua repo, di **Organization `kel-2-wdevsecops` → Settings → Secrets and variables → Actions**. Setiap secret dan variable diberi **Repository access → Selected repositories → `axon-sales-backend` dan `axon-sales-frontend`**, jangan *All repositories*, supaya repo lain di organisasi tidak bisa memakai kunci VPS.
 
-| Jenis | Nama | Isi |
+| Tab | Nama | Isi |
 |---|---|---|
-| Secret | `STAGING_SSH_HOST` | IP atau hostname VPS |
-| Secret | `STAGING_SSH_KEY` | isi file `axon-staging-ci` (private key) |
-| Secret | `STAGING_SSH_KNOWN_HOSTS` | isi file `known_hosts` dari langkah 7 |
-| Variable | `STAGING_SSH_USER` | `deploy` (opsional, default `deploy`) |
-| Variable | `STAGING_URL` | `https://staging.domain-anda.com` (opsional, untuk smoke test) |
+| Secrets | `STAGING_SSH_HOST` | IP atau hostname VPS |
+| Secrets | `STAGING_SSH_KEY` | isi file `axon-staging-ci` (private key) |
+| Secrets | `STAGING_SSH_KNOWN_HOSTS` | isi file `known_hosts` dari langkah 7 |
+| Variables | `STAGING_SSH_USER` | `deploy` (opsional, default `deploy`) |
+| Variables | `STAGING_URL` | `https://staging.domain-anda.com` (opsional, untuk smoke test) |
 
-Di **Deployment branches and tags**, pilih *Selected branches* → `main`, supaya hanya workflow dari `main` yang bisa memakai kunci itu. Setelah semua secret terisi, hapus `axon-staging-ci` dari laptop.
+`NTFY_TOPIC` boleh ikut dipindah ke organisasi dengan cara yang sama.
+
+Hal yang perlu diperhatikan:
+
+- **Paket GitHub.** Pada paket GitHub Free, secret dan variable organisasi hanya bisa dibaca repo **publik**. Kalau kedua repo privat dan organisasinya Free, nilai ini terbaca kosong dan job staging gagal dengan pesan "Secret organisasi untuk staging belum lengkap". Pilihannya: naik ke GitHub Team (untuk keperluan kuliah, dosen dapat mengajukannya lewat GitHub Education), atau kembali memakai secret di environment `staging` masing-masing repo. Nama secret-nya sama, jadi workflow tidak perlu diubah.
+- **Jangan ada salinan dengan nama sama** di repo atau environment. Urutan prioritas GitHub adalah environment → repo → organisasi, jadi salinan lama akan diam-diam menimpa nilai organisasi.
+- **Pagar cabang tetap lewat environment.** Secret organisasi tidak bisa dibatasi per cabang. Karena itu job staging tetap memakai environment `staging` tanpa secret di dalamnya. Di kedua repo, buka **Settings → Environments → `staging`** (dibuat otomatis pada run pertama, atau buat manual), lalu di **Deployment branches and tags** pilih *Selected branches* → `main`.
+
+Setelah semua secret terisi, hapus `axon-staging-ci` dari laptop.
 
 ### 9. Urutan aktivasi
 
@@ -167,7 +175,7 @@ Di **Deployment branches and tags**, pilih *Selected branches* → `main`, supay
 3. Cek `ssh -i ... deploy@IP_VPS status` atau buka `STAGING_URL`.
 4. Isi variable `STAGING_URL` **setelah** BE dan FE sama-sama pernah ter-deploy. Smoke test BE lewat nginx FE (`/api/v1/health`), jadi kalau diisi sebelum container FE ada, staging BE akan gagal.
 
-Selama environment `staging` belum terisi, job staging **gagal** dan rilis tertahan. Itu disengaja: staging adalah gerbang, bukan hiasan.
+Selama secret organisasi di atas belum terisi atau belum dibuka untuk repo ini, job staging **gagal** dan rilis tertahan. Itu disengaja: staging adalah gerbang, bukan hiasan.
 
 ## Operasional
 

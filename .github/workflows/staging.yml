@@ -15,10 +15,16 @@
 #      jalan = digest ini, dan /api/v1/health "ok"), rollback otomatis.
 #   4. Smoke test opsional dari internet lewat Cloudflare (vars.STAGING_URL).
 #
-# Konfigurasi di Settings -> Environments -> staging (lihat staging/README.md):
+# Konfigurasi di tingkat ORGANISASI, satu kali untuk repo BE dan FE:
+# Organization -> Settings -> Secrets and variables -> Actions, dengan
+# Repository access = Selected repositories (BE dan FE saja). Lihat
+# staging/README.md.
 #   secrets: STAGING_SSH_HOST, STAGING_SSH_KEY, STAGING_SSH_KNOWN_HOSTS
 #   vars   : STAGING_SSH_USER (default deploy), STAGING_URL (opsional, mis.
 #            https://staging.example.com)
+# Jangan buat secret bernama sama di repo atau environment "staging": GitHub
+# memakai yang paling dekat (environment > repo > organisasi), jadi salinan
+# lama di sana diam-diam menimpa nilai organisasi.
 # SSH memakai port 22. STAGING_SSH_HOST dan STAGING_SSH_KNOWN_HOSTS tidak
 # sama: yang pertama alamat tujuan, yang kedua host key publik VPS untuk
 # membuktikan bahwa alamat itu memang VPS kita (lihat step Siapkan SSH).
@@ -42,6 +48,9 @@ jobs:
   staging:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Environment hanya dipakai sebagai pagar cabang (Deployment branches =
+    # main), bukan tempat secret: secret organisasi tidak bisa dibatasi per
+    # cabang, environment bisa. Secret-nya tetap dari organisasi.
     environment: staging
     permissions:
       contents: read
@@ -95,7 +104,7 @@ jobs:
           SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
         run: |
           if [ -z "$SSH_KEY" ] || [ -z "$KNOWN_HOSTS" ] || [ -z "$SSH_HOST" ]; then
-            echo "::error::Secret environment staging belum lengkap (STAGING_SSH_HOST, STAGING_SSH_KEY, STAGING_SSH_KNOWN_HOSTS). Lihat staging/README.md."
+            echo "::error::Secret organisasi untuk staging belum lengkap atau repo ini belum diberi akses (STAGING_SSH_HOST, STAGING_SSH_KEY, STAGING_SSH_KNOWN_HOSTS). Lihat staging/README.md."
             exit 1
           fi
           install -d -m 700 ~/.ssh
