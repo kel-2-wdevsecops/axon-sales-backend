@@ -1,4 +1,4 @@
-# Stack staging di VPS 1 GB (yang juga menjalankan Pterodactyl Wings).
+# Stack staging di VPS 1 GB (yang juga menjalankan Panel Pterodactyl).
 # Satu stack untuk semua: MariaDB, BE, FE, dan cloudflared. Disalin SEKALI ke
 # /opt/axon-staging/compose.yaml oleh operator (lihat staging/README.md),
 # bukan oleh workflow: kunci SSH CI hanya boleh menjalankan axon-staging.sh,
@@ -88,7 +88,8 @@ services:
 volumes:
   mariadb-data:
 
-# Network milik stack ini sendiri, terpisah dari pterodactyl_nw milik Wings.
+# Network milik stack ini sendiri (juga terpisah dari pterodactyl_nw kalau
+# suatu saat Wings dipasang di VPS yang sama).
 networks:
   staging:
     name: axon-staging

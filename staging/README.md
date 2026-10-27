@@ -15,52 +15,95 @@ ci ──> build ──> staging ──> release ──> deploy
 
 Image di-build **sekali** di runner GitHub. VPS tidak pernah menjalankan `npm` atau `docker build`; ia hanya menarik image yang sudah di-scan dan di-sign. Image yang sehat di staging adalah image yang sama, byte demi byte, yang nanti sampai ke produksi.
 
-## Kenapa tidak lewat egg Pterodactyl
+## Kenapa tidak lewat Pterodactyl
 
-Pterodactyl adalah panel server game. Wings memang menjalankan Docker, tetapi setiap "server" adalah satu container yolk dengan aturan Wings sendiri: file di `/home/container`, user UID `988`, startup command dari egg, dan satu container per server. Image BE/FE di repo ini sengaja dibuat lain (user `node`/`101`, filesystem image sendiri, nginx non-root di port 8080), dan staging butuh tiga sampai empat container yang saling bicara lewat network privat. Memaksakannya ke egg berarti membongkar hardening image, dan tetap tanpa health check, rollback, atau deploy by digest.
+Pterodactyl adalah panel server game. Server game dijalankan Wings sebagai satu container yolk dengan aturan Wings sendiri: file di `/home/container`, user UID `988`, startup command dari egg, dan satu container per server. Image BE/FE di repo ini sengaja dibuat lain (user `node`/`101`, filesystem image sendiri, nginx non-root di port 8080), dan staging butuh tiga sampai empat container yang saling bicara lewat network privat. Memaksakannya ke egg berarti membongkar hardening image, dan tetap tanpa health check, rollback, atau deploy by digest.
 
-Yang dipakai adalah Docker milik VPS itu sendiri (yang sudah terpasang untuk Wings) lewat `docker compose`. Wings hanya mengurus container yang ia buat sendiri, jadi stack ini tidak mengganggu server game dan sebaliknya. Network-nya pun terpisah (`axon-staging`, bukan `pterodactyl_nw`), dan tidak ada port yang di-publish, jadi tidak bentrok dengan alokasi port Wings.
+VPS staging kelompok ini (Ubuntu 24.04, x86_64, RAM 842 MB, 2 vCPU, Azure) hanya menjalankan **Panel** Pterodactyl (nginx, PHP-FPM, queue worker), **tanpa Wings dan tanpa Docker**. Jadi Docker Engine dipasang sendiri (langkah 3), lalu stack ini dijalankan dengan `docker compose`, terpisah dari Panel. Panel tetap berjalan di host seperti biasa. Kalau suatu saat Wings dipasang di VPS yang sama, keduanya tetap bisa hidup berdampingan: Wings hanya mengurus container buatannya sendiri, network-nya terpisah (`axon-staging` bukan `pterodactyl_nw`), dan stack ini tidak mem-publish port.
 
 ## Anggaran memori
 
-| Container | `mem_limit` | Pemakaian normal |
+| Komponen | `mem_limit` | Pemakaian normal |
 |---|---|---|
+| dockerd + containerd | - | sekitar 60–100 MB |
 | MariaDB (buffer pool 64 MB, `performance_schema` mati) | 320 MB | sekitar 60–120 MB |
-| BE (Node, heap maks 160 MB) | 256 MB | sekitar 70–110 MB |
+| BE (Node, heap maks 160 MB) | 256 MB | sekitar 70–110 MB (perkiraan, belum diukur dengan image asli) |
 | FE (nginx) | 64 MB | sekitar 5–10 MB |
 | cloudflared | 64 MB | sekitar 20–35 MB |
 
-Totalnya sekitar 250–350 MB. Wings sendiri memakai sekitar 50–100 MB. **Kalau Panel Pterodactyl (PHP-FPM, MariaDB, Redis, nginx) juga berjalan di VPS yang sama, ditambah server game, 1 GB tidak cukup**, dan swap hanya menunda OOM killer. Cek dulu sebelum lanjut (langkah 1).
+Totalnya sekitar 300–450 MB, sedangkan `available` VPS sebelum staging hanya sekitar 395 MB. Artinya staging **akan** memakai swap. Itu masih dapat diterima untuk staging yang hanya diakses tim (respons lebih lambat, bukan crash), asalkan swap 2 GB ada dan RAM Panel dihemat (langkah 2). Untuk beban yang lebih serius, 1 GB memang terlalu kecil; naikkan VPS ke 2 GB.
 
 ## Persiapan VPS (sekali, sebelum branch ini di-merge)
 
-Semua perintah dijalankan sebagai root di VPS, kecuali disebut lain.
+Perintah dijalankan sebagai root (`sudo -i`), kecuali disebut lain.
 
 ### 1. Cek kondisi
 
 ```bash
 uname -m                         # harus x86_64: image hanya di-build untuk amd64
-free -m                          # sisa RAM sebelum staging
-docker version                   # Docker sudah ada karena Wings
-docker compose version           # kalau belum ada: apt install docker-compose-plugin
-ps aux --sort=-rss | head -15    # siapa yang memakan RAM
-systemctl is-active wings
+free -m                          # sisa RAM dan swap
+swapon --show                    # swap 2 GB harus ada
+ps aux --sort=-rss | head -20    # siapa yang memakan RAM
+systemctl is-active mariadb mysql redis-server nginx 2>/dev/null
 ```
 
-Kalau `available` di `free -m` kurang dari sekitar 400 MB tanpa swap, matikan dulu server game yang tidak dipakai, atau pindahkan Panel ke mesin lain.
-
-### 2. Swap 2 GB
+Swap 2 GB sudah ada di VPS ini. Kalau suatu saat hilang (mis. VPS dibuat ulang):
 
 ```bash
 fallocate -l 2G /swapfile && chmod 600 /swapfile
 mkswap /swapfile && swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
+```
+
+Turunkan kecenderungan swap, supaya swap hanya dipakai saat benar-benar perlu:
+
+```bash
 echo 'vm.swappiness=10' > /etc/sysctl.d/99-swap.conf && sysctl --system
 ```
 
-### 3. Beri tahu Pterodactyl bahwa RAM itu terpakai
+### 2. Hemat RAM Panel
 
-Di Panel: **Admin → Nodes → (node VPS ini) → Settings → Allocation Limits**, kurangi **Total Memory** sekitar 700 MB dan set **Memory Over-Allocation** ke `0`. Tanpa ini, Panel masih mengira RAM itu bebas dan akan membagikannya ke server game baru.
+Tiga worker `php-fpm: pool www` memakan sekitar 45 MB masing-masing walau Panel sedang tidak dibuka. Dengan `pm = ondemand`, worker hanya hidup saat ada request, lalu dimatikan setelah 30 detik menganggur. Panel tetap berfungsi; hanya request pertama setelah lama diam terasa sedikit lebih lambat.
+
+```bash
+f=$(ls /etc/php/*/fpm/pool.d/www.conf | head -n 1); echo "$f"
+cp "$f" "$f.bak"
+sed -i -E 's/^pm = .*/pm = ondemand/; s/^;?pm.max_children = .*/pm.max_children = 4/; s/^;?pm.process_idle_timeout = .*/pm.process_idle_timeout = 30s/' "$f"
+systemctl restart 'php*-fpm.service'
+systemctl list-units 'php*-fpm*'     # pastikan statusnya active (running)
+```
+
+Opsional, menghemat sekitar 30 MB lagi: Panel tidak membutuhkan snap.
+
+```bash
+snap list                        # pastikan tidak ada snap yang dipakai
+apt purge -y snapd
+```
+
+### 3. Pasang Docker Engine
+
+Dari repositori resmi Docker, yang sekaligus memasang plugin `docker compose`:
+
+```bash
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+less /tmp/get-docker.sh          # baca dulu sebelum menjalankan skrip dari internet
+sh /tmp/get-docker.sh
+```
+
+Batasi ukuran log container, supaya disk dan memori tidak habis oleh log:
+
+```bash
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "local",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+JSON
+systemctl restart docker
+docker version --format '{{.Server.Version}}' && docker compose version
+```
+
+Docker mengatur iptables sendiri, tetapi tidak menyentuh nginx Panel di port 80/443, karena stack staging tidak mem-publish port apa pun.
 
 ### 4. User deploy dan direktori stack
 
