@@ -36,7 +36,8 @@
 #
 # Butuh Settings -> Actions -> General -> "Allow GitHub Actions to create and
 # approve pull requests" menyala, supaya bot boleh membuka PR rilis, dan
-# environment "staging" berisi kredensial SSH VPS (staging/README.md).
+# secret/variable organisasi STAGING_* berisi kredensial SSH VPS
+# (staging/README.md).
 
 name: Release
 
@@ -79,9 +80,8 @@ jobs:
     uses: ./.github/workflows/staging.yml
     with:
       digest: ${{ needs.build.outputs.digest }}
-    # Secret environment "staging" (kunci SSH) dibaca job di staging.yml
-    # sendiri; inherit untuk NTFY_TOPIC dan kalau kredensialnya disimpan
-    # sebagai secret repo.
+    # Secret organisasi (STAGING_SSH_*, NTFY_TOPIC) sampai ke staging.yml
+    # lewat inherit; reusable workflow tidak menerima secret apa pun tanpanya.
     secrets: inherit
 
   release-please:
