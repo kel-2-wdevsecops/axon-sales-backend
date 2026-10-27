@@ -17,8 +17,11 @@
 #
 # Konfigurasi di Settings -> Environments -> staging (lihat staging/README.md):
 #   secrets: STAGING_SSH_HOST, STAGING_SSH_KEY, STAGING_SSH_KNOWN_HOSTS
-#   vars   : STAGING_SSH_USER (default deploy), STAGING_SSH_PORT (default 22),
-#            STAGING_URL (opsional, mis. https://staging.example.com)
+#   vars   : STAGING_SSH_USER (default deploy), STAGING_URL (opsional, mis.
+#            https://staging.example.com)
+# SSH memakai port 22. STAGING_SSH_HOST dan STAGING_SSH_KNOWN_HOSTS tidak
+# sama: yang pertama alamat tujuan, yang kedua host key publik VPS untuk
+# membuktikan bahwa alamat itu memang VPS kita (lihat step Siapkan SSH).
 # Tanpa secret itu job ini GAGAL, bukan dilewati: staging adalah gerbang.
 
 name: Deploy Staging
@@ -81,7 +84,10 @@ jobs:
 
       # known_hosts dari secret, bukan ssh-keyscan atau StrictHostKeyChecking=no:
       # tanpa itu, siapa pun di tengah jalan bisa menyamar jadi VPS dan
-      # menerima GITHUB_TOKEN.
+      # menerima GITHUB_TOKEN. Isinya "<host> ssh-ed25519 AAAA...": host key
+      # publik VPS, bukan alamatnya. Alamat saja tidak membuktikan apa pun
+      # (DNS atau rute bisa dibajak); host key hanya cocok dengan VPS yang
+      # memegang private key server-nya.
       - name: Siapkan SSH
         env:
           SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
@@ -102,11 +108,10 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
           SSH_USER: ${{ vars.STAGING_SSH_USER || 'deploy' }}
-          SSH_PORT: ${{ vars.STAGING_SSH_PORT || '22' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          printf '%s\n' "$GH_TOKEN" | ssh -i ~/.ssh/staging -p "$SSH_PORT" \
+          printf '%s\n' "$GH_TOKEN" | ssh -i ~/.ssh/staging \
             -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes \
             -o ConnectTimeout=20 -o ServerAliveInterval=15 \
             "$SSH_USER@$SSH_HOST" deploy "$SERVICE" "$IMAGE_DIGEST"

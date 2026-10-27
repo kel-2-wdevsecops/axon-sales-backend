@@ -139,8 +139,12 @@ ssh -i axon-staging-ci deploy@IP_VPS bash        # harus ditolak: perintah tidak
 Ambil host key VPS untuk `known_hosts`, lalu **cocokkan fingerprint-nya** dengan `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` yang dijalankan langsung di VPS:
 
 ```bash
-ssh-keyscan -t ed25519 -p 22 IP_VPS > known_hosts && ssh-keygen -lf known_hosts
+ssh-keyscan -t ed25519 IP_VPS > known_hosts && ssh-keygen -lf known_hosts
 ```
+
+Isinya satu baris `IP_VPS ssh-ed25519 AAAA...`: **host key publik** VPS, bukan sekadar alamat. Karena itu `STAGING_SSH_KNOWN_HOSTS` tidak sama dengan `STAGING_SSH_HOST`, walau keduanya memuat IP yang sama. Alamat memberi tahu runner ke mana harus menyambung; host key membuktikan bahwa yang menjawab memang VPS Anda, bukan pihak yang membajak DNS atau rute dan menunggu `GITHUB_TOKEN` dikirim. IP di dalam `known_hosts` harus persis sama dengan `STAGING_SSH_HOST`.
+
+SSH dianggap memakai port 22. Kalau port SSH VPS diubah, tambahkan `-p PORT` di step *Deploy ke VPS staging* pada `staging.yml` kedua repo.
 
 ### 8. Environment `staging` di GitHub
 
@@ -152,7 +156,6 @@ Lakukan di **kedua** repo (BE dan FE): **Settings → Environments → New envir
 | Secret | `STAGING_SSH_KEY` | isi file `axon-staging-ci` (private key) |
 | Secret | `STAGING_SSH_KNOWN_HOSTS` | isi file `known_hosts` dari langkah 7 |
 | Variable | `STAGING_SSH_USER` | `deploy` (opsional, default `deploy`) |
-| Variable | `STAGING_SSH_PORT` | port SSH (opsional, default `22`) |
 | Variable | `STAGING_URL` | `https://staging.domain-anda.com` (opsional, untuk smoke test) |
 
 Di **Deployment branches and tags**, pilih *Selected branches* → `main`, supaya hanya workflow dari `main` yang bisa memakai kunci itu. Setelah semua secret terisi, hapus `axon-staging-ci` dari laptop.
