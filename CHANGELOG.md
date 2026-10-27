@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/kel-2-wdevsecops/axon-sales-backend/compare/v1.1.0...v1.1.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **deps:** perbarui body-parser dan zod untuk menutup celah DoS ([e4239b8](https://github.com/kel-2-wdevsecops/axon-sales-backend/commit/e4239b8477d27ea7fa46dbbd1216bf7225bc10bb))
+* **deps:** perbarui body-parser dan zod untuk menutup celah DoS ([a4c507d](https://github.com/kel-2-wdevsecops/axon-sales-backend/commit/a4c507db888f87daf8407e67020f893f5b708800))
+
 ## [1.1.0](https://github.com/kel-2-wdevsecops/axon-sales-backend/compare/v1.0.1...v1.1.0) (2026-10-10)
 
 
