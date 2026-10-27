@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { useApi } from '../helpers/api';
 
 // DB kosong (hanya hasil `prisma migrate deploy`), kondisi yang sama dengan
-// DAST ZAP di deploy.yml: setiap endpoint harus 200, tanpa NaN/Infinity.
+// DAST ZAP di build.yml: setiap endpoint harus 200, tanpa NaN/Infinity.
 // Fitur baru menambahkan path-nya ke daftar ini.
 const ENDPOINTS = [
   '/dashboard/filters',

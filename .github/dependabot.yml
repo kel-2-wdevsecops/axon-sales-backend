@@ -11,7 +11,7 @@
 #
 # Yang TIDAK diperbarui Dependabot: NODE_VERSION di Dockerfile (FROM memakai
 # ARG) dan image yang di-pin di ci.yml (semgrep, mariadb). Naikkan manual;
-# gerbang Trivy di deploy.yml yang mengingatkan kalau base image tertinggal.
+# gerbang Trivy di build.yml yang mengingatkan kalau base image tertinggal.
 
 version: 2
 updates:

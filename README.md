@@ -120,11 +120,17 @@ Nama model dan kolom mengikuti dump apa adanya: tabel jamak huruf kecil, kolom c
 
 ## CI/CD
 
-- **Pull request ke `main`** (`ci.yml`): commitlint, lint, `npm audit`, test, typecheck, uji migrasi ke MariaDB kosong, SAST (Semgrep), secret scan (Gitleaks), SCA (Trivy fs), SBOM.
-- **Push ke `main`** (`release.yml`): CI dijalankan dulu, lalu release-please membuka atau memperbarui **PR rilis** berdasarkan pesan commit.
-- **PR rilis di-merge**: tag `vX.Y.Z` dibuat, lalu `deploy.yml` berjalan: build, scan image, DAST (ZAP), push ke GHCR, sign (Cosign), provenance, verifikasi di server, deploy, health check, dan rollback otomatis.
+Alur setiap push ke `main`: **ci → build → staging → release → deploy**. Setiap tahap adalah gerbang untuk tahap berikutnya.
 
-Deploy **hanya** terjadi saat PR rilis di-merge. Biarkan PR rilis terbuka sampai server siap.
+- **Pull request ke `main`** (`ci.yml`): commitlint, lint, `npm audit`, test, typecheck, uji migrasi ke MariaDB kosong, SAST (Semgrep), secret scan (Gitleaks), SCA (Trivy fs), SBOM.
+- **Push ke `main`** (`release.yml`):
+  1. `ci.yml` dijalankan lagi.
+  2. `build.yml`: build image, scan image (Trivy), DAST (ZAP), push `:<sha>` ke GHCR, sign (Cosign), provenance.
+  3. `staging.yml`: verifikasi tanda tangan dan provenance, lalu deploy image itu by digest ke VPS staging lewat SSH, health check, rollback otomatis. Panduan VPS ada di [`staging/README.md`](staging/README.md).
+  4. release-please membuka atau memperbarui **PR rilis** berdasarkan pesan commit, atau membuat tag `vX.Y.Z` kalau PR rilis baru di-merge.
+- **PR rilis di-merge** (`deploy.yml`): digest yang sama dengan yang lolos staging diberi tag `:X.Y.Z` dan `:latest` (tanpa build ulang), lalu verifikasi di server produksi, deploy, health check, dan rollback otomatis.
+
+Deploy produksi **hanya** terjadi saat PR rilis di-merge. Biarkan PR rilis terbuka sampai server siap. Staging menerima setiap push ke `main`.
 
 Pesan commit wajib [Conventional Commits](https://www.conventionalcommits.org/). Ini dicek hook husky dan CI, dan dipakai release-please untuk menentukan versi: `feat` menaikkan minor, `fix` patch, `!` major.
 

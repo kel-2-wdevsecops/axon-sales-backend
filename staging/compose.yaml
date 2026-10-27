@@ -1,0 +1,87 @@
+# Stack staging di VPS 1 GB (yang juga menjalankan Panel Pterodactyl).
+# Isinya BE, FE, dan cloudflared. Database TIDAK di-container-kan: BE memakai
+# MariaDB yang sudah berjalan di host untuk Panel, lewat unix socket, dengan
+# database `classicmodels` dan user hanya-SELECT tersendiri (staging/README.md
+# langkah 5). Satu MariaDB lebih sedikit = sekitar 60-120 MB RAM kembali.
+#
+# Disalin SEKALI ke /opt/axon-staging/compose.yaml oleh operator, bukan oleh
+# workflow: kunci SSH CI hanya boleh menjalankan axon-staging.sh, tidak boleh
+# mengganti file ini (compose yang diganti penyerang = root).
+#
+# Image BE/FE tidak pernah di-build di VPS. Workflow staging.yml menyuruh
+# axon-staging.sh menarik image berdasarkan digest (hasil build.yml yang sudah
+# di-scan dan di-sign), lalu menulis referensinya sebagai BE_IMAGE/FE_IMAGE di
+# .env. Digest yang sama nanti dipromosikan ke produksi.
+#
+# Batas memori sengaja ketat; pemakaian normal sekitar 100-150 MB. Swap tetap
+# wajib.
+
+name: axon-staging
+
+services:
+  devsecops_be:
+    # Ditulis axon-staging.sh (BE_IMAGE=ghcr.io/kel-2-wdevsecops/be@sha256:...).
+    image: ${BE_IMAGE:-ghcr.io/kel-2-wdevsecops/be:latest}
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    environment:
+      TZ: Asia/Jakarta
+      PORT: 3008
+      NODE_ENV: production
+      APP_NAME: "Axon Sales API (staging)"
+      # Heap V8 di bawah mem_limit, supaya Node membersihkan memori sebelum
+      # container dibunuh OOM killer.
+      NODE_OPTIONS: --max-old-space-size=160
+      # Lewat socket, bukan TCP: MariaDB host tetap hanya mendengar di
+      # 127.0.0.1 (bawaan Ubuntu), tidak perlu bind-address baru atau aturan
+      # firewall. Host di URL diabaikan saat socketPath diisi; user-nya
+      # dibuat sebagai 'classicmodels_app'@'localhost'.
+      DATABASE_URL: mysql://classicmodels_app:${APP_DB_PASSWORD:?isi APP_DB_PASSWORD di .env}@localhost/classicmodels?socketPath=/run/mysqld/mysqld.sock
+      # Sama dengan produksi: hanya aman selama tidak ada `ports` di stack ini
+      # dan satu-satunya jalan masuk adalah Cloudflare Tunnel.
+      BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-true}
+    volumes:
+      # Folder, bukan file socket: MariaDB membuat socket baru setiap restart,
+      # dan mount file akan tertinggal menunjuk socket lama. Read-only tetap
+      # bisa dipakai untuk connect ke socket.
+      - /run/mysqld:/run/mysqld:ro
+    # Container ini menyentuh socket DB milik host, jadi diperketat: tanpa
+    # capability dan tanpa jalan menaikkan hak (lihat README soal unix_socket).
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [staging]
+
+  devsecops_fe:
+    # Ditulis axon-staging.sh (FE_IMAGE=ghcr.io/kel-2-wdevsecops/fe@sha256:...).
+    image: ${FE_IMAGE:-ghcr.io/kel-2-wdevsecops/fe:latest}
+    restart: unless-stopped
+    mem_limit: 64m
+    environment:
+      API_UPSTREAM: http://devsecops_be:3008
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [staging]
+    # Tanpa Cloudflare Tunnel, buka sementara lewat SSH port forwarding:
+    #   ports: ["127.0.0.1:8081:8080"]   lalu  ssh -L 8081:127.0.0.1:8081 vps
+    # Jangan "8081:8080": port terbuka ke internet dan BEHIND_CLOUDFLARE
+    # harus dimatikan.
+
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+    restart: unless-stopped
+    mem_limit: 64m
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    networks: [staging]
+    # Aktif hanya dengan COMPOSE_PROFILES=tunnel di .env.
+    profiles: [tunnel]
+
+# Network milik stack ini sendiri (juga terpisah dari pterodactyl_nw kalau
+# suatu saat Wings dipasang di VPS yang sama).
+networks:
+  staging:
+    name: axon-staging

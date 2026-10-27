@@ -71,7 +71,7 @@ Router didaftarkan di `src/app.ts` setelah `api.use(apiLimiter)`, mis. `api.use(
 
 **Database kosong**
 
-- Semua pembagian aman nol (hasil `null`), semua `SUM` di-`COALESCE` ke 0, array boleh kosong. Endpoint harus 200 pada DB hasil `prisma migrate deploy` tanpa data, karena ZAP di `deploy.yml` berjalan di kondisi itu.
+- Semua pembagian aman nol (hasil `null`), semua `SUM` di-`COALESCE` ke 0, array boleh kosong. Endpoint harus 200 pada DB hasil `prisma migrate deploy` tanpa data, karena ZAP di `build.yml` berjalan di kondisi itu.
 
 ## Langkah Pengerjaan
 
