@@ -19,19 +19,19 @@ Image di-build **sekali** di runner GitHub. VPS tidak pernah menjalankan `npm` a
 
 Pterodactyl adalah panel server game. Server game dijalankan Wings sebagai satu container yolk dengan aturan Wings sendiri: file di `/home/container`, user UID `988`, startup command dari egg, dan satu container per server. Image BE/FE di repo ini sengaja dibuat lain (user `node`/`101`, filesystem image sendiri, nginx non-root di port 8080), dan staging butuh tiga sampai empat container yang saling bicara lewat network privat. Memaksakannya ke egg berarti membongkar hardening image, dan tetap tanpa health check, rollback, atau deploy by digest.
 
-VPS staging kelompok ini (Ubuntu 24.04, x86_64, RAM 842 MB, 2 vCPU, Azure) hanya menjalankan **Panel** Pterodactyl (nginx, PHP-FPM, queue worker), **tanpa Wings dan tanpa Docker**. Jadi Docker Engine dipasang sendiri (langkah 3), lalu stack ini dijalankan dengan `docker compose`, terpisah dari Panel. Panel tetap berjalan di host seperti biasa. Kalau suatu saat Wings dipasang di VPS yang sama, keduanya tetap bisa hidup berdampingan: Wings hanya mengurus container buatannya sendiri, network-nya terpisah (`axon-staging` bukan `pterodactyl_nw`), dan stack ini tidak mem-publish port.
+VPS staging kelompok ini (Ubuntu 24.04, x86_64, RAM 842 MB, 2 vCPU, Azure) hanya menjalankan **Panel** Pterodactyl (nginx, PHP-FPM, queue worker, MariaDB, Redis), **tanpa Wings dan tanpa Docker**. Jadi Docker Engine dipasang sendiri (langkah 3), lalu BE, FE, dan cloudflared dijalankan dengan `docker compose`. Database staging menumpang di MariaDB host milik Panel, dengan database dan user tersendiri (langkah 5). Panel tetap berjalan di host seperti biasa. Kalau suatu saat Wings dipasang di VPS yang sama, keduanya tetap bisa hidup berdampingan: Wings hanya mengurus container buatannya sendiri, network-nya terpisah (`axon-staging` bukan `pterodactyl_nw`), dan stack ini tidak mem-publish port.
 
 ## Anggaran memori
 
 | Komponen | `mem_limit` | Pemakaian normal |
 |---|---|---|
 | dockerd + containerd | - | sekitar 60–100 MB |
-| MariaDB (buffer pool 64 MB, `performance_schema` mati) | 320 MB | sekitar 60–120 MB |
+| MariaDB | sudah ada untuk Panel | tambahan kecil (data classicmodels hanya beberapa MB) |
 | BE (Node, heap maks 160 MB) | 256 MB | sekitar 70–110 MB (perkiraan, belum diukur dengan image asli) |
 | FE (nginx) | 64 MB | sekitar 5–10 MB |
 | cloudflared | 64 MB | sekitar 20–35 MB |
 
-Totalnya sekitar 300–450 MB, sedangkan `available` VPS sebelum staging hanya sekitar 395 MB. Artinya staging **akan** memakai swap. Itu masih dapat diterima untuk staging yang hanya diakses tim (respons lebih lambat, bukan crash), asalkan swap 2 GB ada dan RAM Panel dihemat (langkah 2). Untuk beban yang lebih serius, 1 GB memang terlalu kecil; naikkan VPS ke 2 GB.
+Tambahannya sekitar 160–250 MB, sedangkan `available` VPS sebelum staging hanya sekitar 395 MB. Artinya staging **akan** memakai swap. Itu masih dapat diterima untuk staging yang hanya diakses tim (respons lebih lambat, bukan crash), asalkan swap 2 GB ada dan RAM Panel dihemat (langkah 2). Untuk beban yang lebih serius, 1 GB memang terlalu kecil; naikkan VPS ke 2 GB.
 
 ## Persiapan VPS (sekali, sebelum branch ini di-merge)
 
@@ -111,35 +111,58 @@ Docker mengatur iptables sendiri, tetapi tidak menyentuh nginx Panel di port 80/
 adduser --disabled-password --gecos "" deploy
 usermod -aG docker deploy        # grup docker = setara root, karena itu kuncinya dikunci (langkah 7)
 install -d -o deploy -g deploy -m 750 /opt/axon-staging
-# 755: script init dibaca entrypoint MariaDB sebagai user mysql (UID 999).
-install -d -o deploy -g deploy -m 755 /opt/axon-staging/initdb
 ```
 
-### 5. Salin file dari repo ini
+### 5. Salin file dan siapkan database
 
 Dari laptop, di root repo BE (ganti `vps` dengan host SSH admin):
 
 ```bash
-scp staging/compose.yaml staging/mariadb.cnf staging/.env.example vps:/opt/axon-staging/
-scp staging/initdb/20-app-user.sh vps:/opt/axon-staging/initdb/
-scp test/fixtures/classicmodels.sql vps:/opt/axon-staging/initdb/10-classicmodels.sql
+scp staging/compose.yaml staging/.env.example vps:/opt/axon-staging/
 scp staging/axon-staging.sh vps:/usr/local/bin/axon-staging
+scp test/fixtures/classicmodels.sql vps:/tmp/classicmodels.sql
 ```
 
-Lalu di VPS:
+Lalu di VPS. Pertama skrip dan `.env`:
 
 ```bash
 chmod 755 /usr/local/bin/axon-staging && chown root:root /usr/local/bin/axon-staging
-chmod 755 /opt/axon-staging/initdb/20-app-user.sh
 cd /opt/axon-staging
 cp .env.example .env && chmod 600 .env
-sed -i "s/^MARIADB_ROOT_PASSWORD=.*/MARIADB_ROOT_PASSWORD=$(openssl rand -hex 24)/" .env
 sed -i "s/^APP_DB_PASSWORD=.*/APP_DB_PASSWORD=$(openssl rand -hex 24)/" .env
 nano .env                        # isi TUNNEL_TOKEN (langkah 6)
 chown -R deploy:deploy /opt/axon-staging
 ```
 
 Skrip dimiliki root dan tidak bisa ditulis user `deploy`: kunci CI tidak bisa mengubah perintah yang dijalankannya sendiri.
+
+Kedua, database `classicmodels` di MariaDB host. Dump membuat database-nya sendiri, terpisah dari database Panel (`panel`). User `'classicmodels_app'@'localhost'` hanya punya `SELECT` di database itu, jadi tidak bisa membaca atau mengubah data Panel:
+
+```bash
+mariadb < /tmp/classicmodels.sql && rm /tmp/classicmodels.sql
+PW=$(sed -n 's/^APP_DB_PASSWORD=//p' /opt/axon-staging/.env)
+mariadb -e "CREATE USER 'classicmodels_app'@'localhost' IDENTIFIED BY '$PW';
+            GRANT SELECT ON classicmodels.* TO 'classicmodels_app'@'localhost';"
+unset PW
+mariadb -e "SHOW GRANTS FOR 'classicmodels_app'@'localhost'"
+```
+
+Ketiga, jaga folder socket tetap sama saat MariaDB di-restart. Container BE me-mount `/run/mysqld` dari host. Secara bawaan systemd menghapus folder itu setiap MariaDB berhenti (mis. saat `unattended-upgrades` memasang pembaruan keamanan), lalu membuat folder baru. Container masih menunjuk folder lama, dan BE kehilangan database sampai di-restart. Ini mencegahnya:
+
+```bash
+mkdir -p /etc/systemd/system/mariadb.service.d
+printf '[Service]\nRuntimeDirectoryPreserve=yes\n' > /etc/systemd/system/mariadb.service.d/staging-socket.conf
+systemctl daemon-reload && systemctl restart mariadb
+```
+
+Keempat, pastikan socket itu tidak membuka pintu lain. MariaDB di Ubuntu mengizinkan login lewat `unix_socket` berdasarkan UID proses. Proses di container BE berjalan sebagai UID 1000. Jadi pastikan tidak ada akun MariaDB `unix_socket` milik user host ber-UID 1000:
+
+```bash
+getent passwd 1000 | cut -d: -f1                 # nama user host ber-UID 1000, kalau ada
+mariadb -e "SELECT user, host FROM mysql.global_priv WHERE priv LIKE '%unix_socket%'"
+```
+
+Yang boleh muncul hanya `root` dan `mysql`. Kalau nama dari perintah pertama ikut muncul, hapus akun itu atau ganti plugin-nya ke password.
 
 ### 6. Cloudflare Tunnel
 
@@ -149,14 +172,11 @@ Disarankan memasang **Cloudflare Access** di hostname itu supaya staging tidak t
 
 Tanpa Cloudflare: kosongkan `COMPOSE_PROFILES`, set `BEHIND_CLOUDFLARE=false`, aktifkan baris `ports: ["127.0.0.1:8081:8080"]` di `compose.yaml`, lalu akses lewat `ssh -L 8081:127.0.0.1:8081 vps`.
 
-Jalankan database dan tunnel (BE dan FE baru muncul setelah pipeline pertama):
+Jalankan tunnel (BE dan FE baru muncul setelah pipeline pertama):
 
 ```bash
-sudo -u deploy docker compose -f /opt/axon-staging/compose.yaml up -d mariadb cloudflared
-sudo -u deploy docker compose -f /opt/axon-staging/compose.yaml logs -f mariadb   # tunggu "ready for connections"
+sudo -u deploy docker compose -f /opt/axon-staging/compose.yaml up -d cloudflared
 ```
-
-Import dump hanya berjalan saat volume `mariadb-data` masih kosong. Setelah itu `initdb/10-classicmodels.sql` boleh dihapus untuk menghemat disk.
 
 ### 7. Kunci SSH khusus CI
 
@@ -226,10 +246,10 @@ Selama secret organisasi di atas belum terisi atau belum dibuka untuk repo ini, 
 |---|---|
 | Status stack dan RAM | `sudo -u deploy axon-staging status` |
 | Log BE | `sudo -u deploy docker compose -f /opt/axon-staging/compose.yaml logs --tail 100 devsecops_be` |
-| Reset data staging | `docker compose ... down -v`, salin ulang dump ke `initdb/`, lalu `up -d mariadb` |
+| Reset data staging | `mariadb < classicmodels.sql` (dump menghapus dan membuat ulang tabelnya), user dan grant tetap |
 | Kenapa digest X jalan | `grep _IMAGE= /opt/axon-staging/.env`, lalu cocokkan dengan run Actions |
 
-`compose.yaml`, `mariadb.cnf`, dan `axon-staging.sh` **tidak** disinkronkan oleh workflow. Kalau file itu berubah di repo, salin ulang secara manual (langkah 5). Ini harga dari keamanan: kunci CI yang bisa mengganti `compose.yaml` bisa menjalankan container `privileged` dan menguasai seluruh VPS, termasuk Pterodactyl.
+`compose.yaml` dan `axon-staging.sh` **tidak** disinkronkan oleh workflow. Kalau file itu berubah di repo, salin ulang secara manual (langkah 5). Ini harga dari keamanan: kunci CI yang bisa mengganti `compose.yaml` bisa menjalankan container `privileged` dan menguasai seluruh VPS, termasuk Pterodactyl.
 
 ## Kalau gagal
 
@@ -238,6 +258,7 @@ Selama secret organisasi di atas belum terisi atau belum dibuka untuk repo ini, 
 | `Host key verification failed` | `STAGING_SSH_KNOWN_HOSTS` kosong/salah, atau VPS di-reinstall |
 | `Permission denied (publickey)` | baris `authorized_keys` salah, atau mode file bukan `600` |
 | `denied` saat `docker pull` | package GHCR belum memberi akses repo ini (Package settings → Manage Actions access) |
-| BE tidak sehat, rollback (`exit 3`) | biasanya DB: `APP_DB_PASSWORD` di `.env` berbeda dengan user yang dibuat saat init pertama |
-| Container mati dengan `OOMKilled` | RAM habis: lihat `free -m`, matikan server game, atau naikkan VPS |
+| BE tidak sehat, rollback (`exit 3`) | biasanya DB: `APP_DB_PASSWORD` di `.env` berbeda dengan password user `classicmodels_app`, atau MariaDB host mati (`systemctl status mariadb`) |
+| BE sempat sehat, lalu `/api/v1/health` gagal setelah MariaDB di-restart | drop-in `RuntimeDirectoryPreserve=yes` (langkah 5) belum dipasang; restart BE: `docker compose up -d --force-recreate devsecops_be` |
+| Container mati dengan `OOMKilled` | RAM habis: lihat `free -m`, jalankan langkah 2, atau naikkan VPS |
 | `exec format error` | VPS bukan x86_64 |
