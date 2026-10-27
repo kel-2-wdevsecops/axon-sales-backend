@@ -39,6 +39,15 @@ on:
         description: Digest image hasil build.yml (sha256:...).
         required: true
         type: string
+    secrets:
+      STAGING_SSH_KEY:
+        required: true
+      STAGING_SSH_KNOWN_HOSTS:
+        required: true
+      STAGING_SSH_HOST:
+        required: true
+      NTFY_TOPIC:
+        required: false
 
 env:
   IMAGE_NAME: ghcr.io/kel-2-wdevsecops/be

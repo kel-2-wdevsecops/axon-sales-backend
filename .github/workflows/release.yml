@@ -80,9 +80,13 @@ jobs:
     uses: ./.github/workflows/staging.yml
     with:
       digest: ${{ needs.build.outputs.digest }}
-    # Secret organisasi (STAGING_SSH_*, NTFY_TOPIC) sampai ke staging.yml
-    # lewat inherit; reusable workflow tidak menerima secret apa pun tanpanya.
-    secrets: inherit
+    # Secret organisasi (STAGING_SSH_*, NTFY_TOPIC) diteruskan satu per satu,
+    # bukan inherit: staging.yml hanya menerima yang dipakainya.
+    secrets:
+      STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+      STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
 
   release-please:
     needs: staging
