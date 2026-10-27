@@ -1,0 +1,94 @@
+# Stack staging di VPS 1 GB (yang juga menjalankan Pterodactyl Wings).
+# Satu stack untuk semua: MariaDB, BE, FE, dan cloudflared. Disalin SEKALI ke
+# /opt/axon-staging/compose.yaml oleh operator (lihat staging/README.md),
+# bukan oleh workflow: kunci SSH CI hanya boleh menjalankan axon-staging.sh,
+# tidak boleh mengganti file ini (compose yang diganti penyerang = root).
+#
+# Image BE/FE tidak pernah di-build di VPS. Workflow staging.yml menyuruh
+# axon-staging.sh menarik image berdasarkan digest (hasil build.yml yang sudah
+# di-scan dan di-sign), lalu menulis referensinya sebagai BE_IMAGE/FE_IMAGE di
+# .env. Digest yang sama nanti dipromosikan ke produksi.
+#
+# Batas memori sengaja ketat. Jumlah batasnya (~700 MB) adalah batas atas,
+# bukan pemakaian; pemakaian normal sekitar 250-350 MB. Swap tetap wajib.
+
+name: axon-staging
+
+services:
+  mariadb:
+    image: docker.io/library/mariadb:11.8@sha256:93fc3fe333b6cdfb061425869c2c3a5bb2851c0c74dbebc2c940f024e7482d76
+    restart: unless-stopped
+    mem_limit: 320m
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?isi MARIADB_ROOT_PASSWORD di .env}
+      # Dipakai initdb/20-app-user.sh untuk membuat user hanya-SELECT.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?isi APP_DB_PASSWORD di .env}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb.cnf:/etc/mysql/conf.d/zz-staging.cnf:ro
+      # Hanya dijalankan saat volume data masih kosong (start pertama).
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [staging]
+
+  devsecops_be:
+    # Ditulis axon-staging.sh (BE_IMAGE=ghcr.io/kel-2-wdevsecops/be@sha256:...).
+    image: ${BE_IMAGE:-ghcr.io/kel-2-wdevsecops/be:latest}
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Jakarta
+      PORT: 3008
+      NODE_ENV: production
+      APP_NAME: "Axon Sales API (staging)"
+      # Heap V8 di bawah mem_limit, supaya Node membersihkan memori sebelum
+      # container dibunuh OOM killer.
+      NODE_OPTIONS: --max-old-space-size=160
+      DATABASE_URL: mysql://classicmodels_app:${APP_DB_PASSWORD}@mariadb:3306/classicmodels
+      # Sama dengan produksi: hanya aman selama tidak ada `ports` di stack ini
+      # dan satu-satunya jalan masuk adalah Cloudflare Tunnel.
+      BEHIND_CLOUDFLARE: ${BEHIND_CLOUDFLARE:-true}
+    networks: [staging]
+
+  devsecops_fe:
+    # Ditulis axon-staging.sh (FE_IMAGE=ghcr.io/kel-2-wdevsecops/fe@sha256:...).
+    image: ${FE_IMAGE:-ghcr.io/kel-2-wdevsecops/fe:latest}
+    restart: unless-stopped
+    mem_limit: 64m
+    environment:
+      API_UPSTREAM: http://devsecops_be:3008
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [staging]
+    # Tanpa Cloudflare Tunnel, buka sementara lewat SSH port forwarding:
+    #   ports: ["127.0.0.1:8081:8080"]   lalu  ssh -L 8081:127.0.0.1:8081 vps
+    # Jangan "8081:8080": port terbuka ke internet dan BEHIND_CLOUDFLARE
+    # harus dimatikan.
+
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07
+    restart: unless-stopped
+    mem_limit: 64m
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    networks: [staging]
+    # Aktif hanya dengan COMPOSE_PROFILES=tunnel di .env.
+    profiles: [tunnel]
+
+volumes:
+  mariadb-data:
+
+# Network milik stack ini sendiri, terpisah dari pterodactyl_nw milik Wings.
+networks:
+  staging:
+    name: axon-staging

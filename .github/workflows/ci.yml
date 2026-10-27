@@ -88,7 +88,7 @@ jobs:
         run: npx tsc --noEmit
 
   # Migrasi baseline (0_init) dipakai untuk membuat tabel DB kosong, mis. DB
-  # DAST di deploy.yml. Di sini semua migrasi diterapkan ke MariaDB kosong,
+  # DAST di build.yml. Di sini semua migrasi diterapkan ke MariaDB kosong,
   # lalu schema.prisma dibandingkan dengan hasilnya: kalau berbeda, ada
   # perubahan skema yang lupa dibuatkan migrasi (mis. hanya di-`db:push`).
   migrations:
@@ -131,7 +131,7 @@ jobs:
       - name: Skema sesuai dengan migrasi
         run: npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
 
-      # DB ini kosong, sama dengan DB DAST di deploy.yml: semua endpoint
+      # DB ini kosong, sama dengan DB DAST di build.yml: semua endpoint
       # dashboard harus tetap 200 (test/empty/).
       - name: Generate Prisma client
         run: npx prisma generate
@@ -238,7 +238,7 @@ jobs:
           exit-code: '1'
 
       # SBOM dependency (CycloneDX), disimpan sebagai artifact run. SBOM image
-      # dibuat terpisah oleh buildx di deploy.yml dan ikut ke registry.
+      # dibuat terpisah oleh buildx di build.yml dan ikut ke registry.
       - name: SBOM (CycloneDX)
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
